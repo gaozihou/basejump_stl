@@ -207,9 +207,7 @@ module  bsg_channel_tunnel_wormhole
   for (i = 0; i < num_in_p; i++) 
   begin: ch_out
   
-    logic ofifo_data_ready_lo, ofifo_header_ready_lo;
-  
-    // Header to CT
+    // Counter for demultiplexed wormhole packet input
     logic [len_width_p-1:0] ocount_r;
     logic ocount_r_is_min_lo, ocount_en_lo;
     
@@ -219,9 +217,9 @@ module  bsg_channel_tunnel_wormhole
     assign ocount_r_is_min_lo = (ocount_r == counter_min_value_lp);
     
     bsg_counter_generic
-   #(.width_p   (len_width_p)
-    ,.max_step_p(1)
-    ,.init_val_p(counter_min_value_lp)
+   #(.width_p    (len_width_p)
+    ,.max_step_p (1)
+    ,.init_val_p (counter_min_value_lp)
     )
     ocount
     (.clk_i      (clk_i)
@@ -234,12 +232,13 @@ module  bsg_channel_tunnel_wormhole
     ,.cur_val_r_o(ocount_r)
     );
     
-    // Data fifo
+    // Data flit fifo
     //
     // ofifo size should be larger than 2 (default value is set to 4).
     // This is because there are two-cycle delay for wormhole header flit to
     // show up on the other side of channel tunnel.
     // To keep sending without bubble, ofifo must be large enough.
+    logic ofifo_data_valid_li, ofifo_data_ready_lo;
     
     bsg_fifo_1r1w_small 
    #(.width_p(width_p)
@@ -250,14 +249,15 @@ module  bsg_channel_tunnel_wormhole
 
     ,.ready_o(ofifo_data_ready_lo)
     ,.data_i (data_li[i])
-    ,.v_i    (~ocount_r_is_min_lo & v_li[i])
+    ,.v_i    (ofifo_data_valid_li)
 
     ,.v_o    (ofifo_valid_lo[i])
     ,.data_o (ofifo_data_lo[i])
     ,.yumi_i (ofifo_yumi_li[i])
     );
     
-    // Header fifo
+    // Header flit fifo, going into bsg_channel_tunnel
+    logic o_headerin_valid_li, o_headerin_ready_lo;
     
     bsg_two_fifo
    #(.width_p(raw_width_lp)
@@ -265,16 +265,20 @@ module  bsg_channel_tunnel_wormhole
     (.clk_i  (clk_i)
     ,.reset_i(reset_i)
 
-    ,.ready_o(ofifo_header_ready_lo)
+    ,.ready_o(o_headerin_ready_lo)
     ,.data_i (data_li[i][raw_width_lp-1:0])
-    ,.v_i    (ocount_r_is_min_lo & v_li[i])
+    ,.v_i    (o_headerin_valid_li)
 
     ,.v_o    (inside_valid_li[i])
     ,.data_o (inside_data_li[i])
     ,.yumi_i (inside_yumi_lo[i])
     );
     
-    assign ready_lo[i] = (ocount_r_is_min_lo)? ofifo_header_ready_lo : ofifo_data_ready_lo;
+    // Demux splitting header flit and data flit traffic
+    assign ofifo_data_valid_li = v_li[i] & ~ocount_r_is_min_lo;
+    assign o_headerin_valid_li = v_li[i] &  ocount_r_is_min_lo;
+    
+    assign ready_lo[i] = (ocount_r_is_min_lo)? o_headerin_ready_lo : ofifo_data_ready_lo;
 
   end
   
@@ -282,16 +286,16 @@ module  bsg_channel_tunnel_wormhole
   // Header out of channel tunnel are buffered in bsg_two_fifo
   // TODO: might be removed later to reduce latency
   
-  logic headerout_ready_lo;
-  assign outside_yumi_li = headerout_ready_lo & outside_valid_lo;
+  logic o_headerout_ready_lo;
+  assign outside_yumi_li = o_headerout_ready_lo & outside_valid_lo;
   
   bsg_two_fifo 
  #(.width_p(width_p)
   ) o_headerout
-  (.clk_i(clk_i)
+  (.clk_i  (clk_i)
   ,.reset_i(reset_i)
 
-  ,.ready_o(headerout_ready_lo)
+  ,.ready_o(o_headerout_ready_lo)
   ,.data_i (outside_data_lo)
   ,.v_i    (outside_valid_lo)
 
@@ -301,7 +305,7 @@ module  bsg_channel_tunnel_wormhole
   );
   
   
-  // Channel Tunnel Output Select
+  // Channel Tunnel Output Multiplexing
   
   // Description of algorithm:
   // This is the main part for traffic multiplexing.
@@ -445,9 +449,9 @@ module  bsg_channel_tunnel_wormhole
     assign icount_r_is_min_lo = (icount_r == counter_min_value_lp);
     
     bsg_counter_generic
-   #(.width_p   (len_width_p)
-    ,.max_step_p(1)
-    ,.init_val_p(counter_min_value_lp)
+   #(.width_p    (len_width_p)
+    ,.max_step_p (1)
+    ,.init_val_p (counter_min_value_lp)
     )
     icounter
     (.clk_i      (clk_i)
@@ -460,9 +464,10 @@ module  bsg_channel_tunnel_wormhole
     ,.cur_val_r_o(icount_r)
     );
     
-    // Decide whether to dequeue from channel tunnel or from ififo.
+    // Mux merging header flit and data flit
     assign v_lo[i]           = (icount_r_is_min_lo)? inside_valid_lo[i] : ififo_valid_lo;
-    assign data_lo[i]        = (icount_r_is_min_lo)? inside_data_lo[i] : ififo_data_lo;
+    assign data_lo[i]        = (icount_r_is_min_lo)? inside_data_lo[i]  : ififo_data_lo;
+    
     assign ififo_yumi_li     = (icount_r_is_min_lo)? 0 : yumi_li[i];
     assign inside_yumi_li[i] = (icount_r_is_min_lo)? yumi_li[i] : 0;
   
@@ -488,7 +493,7 @@ module  bsg_channel_tunnel_wormhole
   );
   
   
-  // Channel Tunnel Input Select
+  // Channel Tunnel Multiplexed Input Demux
   
   // Description of algorithm:
   // This is the main part for traffic demultiplexing.
