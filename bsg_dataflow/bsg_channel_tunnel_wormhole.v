@@ -18,15 +18,15 @@
 //
 //
 
-/***************** Example data-paths for 2 inputs / outputs ********************* 
+/***************** Example data-paths for 2 inputs / outputs ****************************
   
             +-------+
             |Counter|
             +-------+
-                /|                    +-----------+
-  Input 1      + +------------------->+  OFIFO 1  +-------------+   +-------+
- ------------->+ |                    +-----------+             |   | State |
-               + +--------+                                     |   |Machine|
+                /|                    +-----------+                 +-------+
+  Input 1      + +------------------->+  OFIFO 1  +-------------+   |  Reg  |
+ ------------->+ |                    +-----------+             |   +-------+
+               + +--------+                                     |   |Counter|
                 \|        |           +-----------+             |   +-------+
             +-------+  +------------->+  OFIFO 2  +-----------+ |      |\
             |Counter|  |  |           +-----------+           | +----->+ +
@@ -34,7 +34,7 @@
                 /|     |  |                                   +------->+ +-------------->
   Input 2      + +-----+  |  +-----------------------------+           | |
  ------------->+ |        +->+                             |    +----->+ +
-               + +----+      |                             +--->+      +/
+               + +----+      |                             +----+      +/
                 \+    +----->+                             |
                              |      BSG Channel Tunnel     |
                 /+    +------+                             |
@@ -46,15 +46,15 @@
             |Counter|  |  |           +-----------+           | +------+ +
             +-------+  +--------------+  IFIFO 1  +<----------+ |      |/
                 /|        |           +-----------+             |   +-------+
-  Output 2     + +<-------+                                     |   | State |
- <-------------+ |                    +-----------+             |   |Machine|
-               + +<-------------------+  IFIFO 2  +<------------+   +-------+
-                \|                    +-----------+
+  Output 2     + +<-------+                                     |   |Counter|
+ <-------------+ |                    +-----------+             |   +-------+
+               + +<-------------------+  IFIFO 2  +<------------+   |  Reg  |
+                \|                    +-----------+                 +-------+
             +-------+
             |Counter|
             +-------+
   
-***********************************************************************************/
+****************************************************************************************/
 
 
 `include "bsg_noc_links.vh"
@@ -119,8 +119,11 @@ module  bsg_channel_tunnel_wormhole
   ,output [num_in_p-1:0][bsg_ready_and_link_sif_width_lp-1:0] link_o
   );
   
+
   
-  // Original Channel Tunnel
+/*************************** Original Channel Tunnel ****************************/
+
+
   logic outside_valid_li, outside_yumi_lo;
   logic [width_p-1:0] outside_data_li;
   
@@ -165,7 +168,8 @@ module  bsg_channel_tunnel_wormhole
   genvar i;
   
   
-  // Interfacing bsg_noc links 
+/*************************** BSG NOC Link Interface ****************************/
+
 
   logic [num_in_p-1:0] v_lo, yumi_li;
   logic [num_in_p-1:0][width_p-1:0] data_lo;
@@ -193,7 +197,9 @@ module  bsg_channel_tunnel_wormhole
   end
   
   
-  // Channel Tunnel Data Output
+  
+/*************************** Channel Tunnel Output ****************************/
+
   
   logic [mux_num_in_lp-1:0] ofifo_valid_lo, ofifo_yumi_li;
   logic [mux_num_in_lp-1:0][width_p-1:0] ofifo_data_lo;
@@ -314,22 +320,57 @@ module  bsg_channel_tunnel_wormhole
   // Then data flits are poped out from selected ofifo, until the whole packet is sent.
   // Credit returning packet also come out from channel tunnel, which is a 1-flit packet.
   
-  logic [tag_width_lp-1:0] mux_sel_r, mux_sel_n;
-  logic [len_width_p-1:0]  ostate_r, ostate_n;
+  logic [tag_width_lp-1:0] multi_data_o_tag;
+  logic [len_width_p-1:0]  multi_data_o_len;
+  logic                    multi_data_o_is_credit;
   
-  always_ff @(posedge clk_i) 
-  begin
-    if (reset_i) 
-      begin
-        ostate_r  <= counter_min_value_lp;
-        mux_sel_r <= num_in_p;
-      end 
-    else 
-      begin
-        ostate_r  <= ostate_n;
-        mux_sel_r <= mux_sel_n;
-      end
-  end
+  assign multi_data_o_tag       =  multi_data_o[raw_width_lp+:tag_width_lp];
+  assign multi_data_o_len       =  multi_data_o[len_offset_lp+:len_width_p];
+  assign multi_data_o_is_credit = (multi_data_o_tag == num_in_p);
+  
+  // Counter for multiplexed output
+  logic [len_width_p-1:0] ostate_r;
+  logic ostate_en_lo, ostate_r_is_min_lo;
+  
+  // Update counter only when packet flit dequeue from fifo
+  // and upcoming packet is not for credit returning
+  assign ostate_en_lo       = multi_yumi_i & ~multi_data_o_is_credit;
+  assign ostate_r_is_min_lo = (ostate_r == counter_min_value_lp);
+  
+  bsg_counter_generic
+ #(.width_p    (len_width_p)
+  ,.max_step_p (1)
+  ,.init_val_p (counter_min_value_lp)
+  )
+  ostate_counter
+  (.clk_i      (clk_i)
+  ,.reset_i    (reset_i)
+  ,.en_i       (ostate_en_lo)
+  ,.set_i      (ostate_r_is_min_lo)
+  ,.up_i       (1'b0)
+  ,.down_i     (1'b1)
+  ,.set_val_i  (multi_data_o_len)
+  ,.cur_val_r_o(ostate_r)
+  );
+  
+  // Register fifo selection
+  logic [tag_width_lp-1:0] ofifo_sel_r;
+  
+  bsg_dff_reset_en 
+ #(.width_p    (tag_width_lp)
+  ,.reset_val_p(0)
+  ) ofifo_reg
+  (.clk_i      (clk_i)
+  ,.reset_i    (reset_i)
+  ,.data_i     (multi_data_o_tag)
+  ,.en_i       (ostate_en_lo & ostate_r_is_min_lo)
+  ,.data_o     (ofifo_sel_r)
+  );
+  
+  // Header flits come from channel tunnel
+  // Data flits come from selected ofifos
+  logic [tag_width_lp-1:0] omux_sel_lo;
+  assign omux_sel_lo = (ostate_r_is_min_lo)? num_in_p : ofifo_sel_r;
   
   // data selection
   bsg_mux 
@@ -337,7 +378,7 @@ module  bsg_channel_tunnel_wormhole
   ,.els_p(mux_num_in_lp)
   ) out_data_mux
   (.data_i(ofifo_data_lo)
-  ,.sel_i (mux_sel_r)
+  ,.sel_i (omux_sel_lo)
   ,.data_o(multi_data_o)
   );
   
@@ -347,7 +388,7 @@ module  bsg_channel_tunnel_wormhole
   ,.els_p(mux_num_in_lp)
   ) out_v_mux
   (.data_i(ofifo_valid_lo)
-  ,.sel_i (mux_sel_r)
+  ,.sel_i (omux_sel_lo)
   ,.data_o(multi_v_o)
   );
   
@@ -355,59 +396,119 @@ module  bsg_channel_tunnel_wormhole
   bsg_decode_with_v 
  #(.num_out_p(mux_num_in_lp)
   ) out_yumi_bdwv
-  (.i  (mux_sel_r)
+  (.i  (omux_sel_lo)
   ,.v_i(multi_yumi_i)
   ,.o  (ofifo_yumi_li)
   );
   
-  // State machine to handle valid-data-yumi selection
-  //
-  // Initial state (or default state) selection is bsg_channel_tunnel
-  // When a header flit come out from bsg_channel_tunnel, selection is updated based on
-  // the source of upcoming wormhole packet (from which data buffer). After the whole packet is
-  // sent, it returns to default state selection.
-  // When a credit returning flit comes out, selection is not updated (it is a 1-flit packet).
-  always_comb 
-  begin
-    
-    ostate_n  = ostate_r;
-    mux_sel_n = mux_sel_r;
-    
-    if (multi_yumi_i) 
-        
-        // In default state
-        // Send out wormhole packet header flit
-        if (ostate_r == counter_min_value_lp)
-          begin
-            // When upcoming packet is not for credit returning
-            // Update state
-            if (multi_data_o[raw_width_lp+:tag_width_lp] < num_in_p) 
-              begin
-                ostate_n = multi_data_o[len_offset_lp+:len_width_p];
-                // When packet length is non-zero (payload flits non-zero)
-                // Update ofifo selection
-                if (multi_data_o[len_offset_lp+:len_width_p] != 0) 
-                    mux_sel_n = multi_data_o[raw_width_lp+:tag_width_lp];
-              end
-          end
-        // In other states
-        // Send out wormhole packet payload flits
-        else
-          begin
-            ostate_n = ostate_r - 1;
-            // When sending out last data flit
-            // Return to default selection
-            if (ostate_r == counter_min_value_lp+1) 
-                mux_sel_n = num_in_p;
-          end
-  
-  end
   
   
   
-  // Channel Tunnel Data Input
+/*************************** Channel Tunnel Input ****************************/
+  
   
   logic [mux_num_in_lp-1:0] ififo_valid_li, ififo_ready_lo;
+  
+  
+  // Channel Tunnel Multiplexed Input Demux
+  
+  // Description of algorithm:
+  // This is the main part for traffic demultiplexing.
+  // Traffic coming in has (n+1) possible destinations: n ififos and 1 channel tunnel.
+  // Wormhole header flits and credit returning flit should go into channel tunnel.
+  // Data flits should go into corresponding ififos.
+  // Destination is selected by "reserved bits" generated by sender.
+  
+  logic multi_data_i_is_credit;
+  logic [tag_width_lp-1:0] multi_data_i_tag;
+  logic [len_width_p-1:0]  multi_data_i_len;
+  
+  assign multi_data_i_tag       =  multi_data_i[raw_width_lp+:tag_width_lp];
+  assign multi_data_i_len       =  multi_data_i[len_offset_lp+:len_width_p];
+  assign multi_data_i_is_credit = (multi_data_i_tag == num_in_p);
+  
+  // Counter for multiplexed input
+  logic [len_width_p-1:0] istate_r;
+  logic istate_r_is_min_lo, istate_en_lo;
+  
+  // Update counter only when packet flit accepted to fifo
+  // and upcoming packet is not for credit returning
+  assign istate_en_lo       = multi_v_i & multi_ready_o & ~multi_data_i_is_credit;
+  assign istate_r_is_min_lo = (istate_r == counter_min_value_lp);
+  
+  bsg_counter_generic
+ #(.width_p    (len_width_p)
+  ,.max_step_p (1)
+  ,.init_val_p (counter_min_value_lp)
+  )
+  istate_counter
+  (.clk_i      (clk_i)
+  ,.reset_i    (reset_i)
+  ,.en_i       (istate_en_lo)
+  ,.set_i      (istate_r_is_min_lo)
+  ,.up_i       (1'b0)
+  ,.down_i     (1'b1)
+  ,.set_val_i  (multi_data_i_len)
+  ,.cur_val_r_o(istate_r)
+  );
+  
+  // Register fifo selection
+  logic [tag_width_lp-1:0] ififo_sel_r;
+  
+  bsg_dff_reset_en 
+ #(.width_p    (tag_width_lp)
+  ,.reset_val_p(0)
+  ) ififo_reg
+  (.clk_i      (clk_i)
+  ,.reset_i    (reset_i)
+  ,.data_i     (multi_data_i_tag)
+  ,.en_i       (istate_en_lo & istate_r_is_min_lo)
+  ,.data_o     (ififo_sel_r)
+  );
+  
+  // Header flits come from channel tunnel
+  // Data flits come from selected ofifos
+  logic [tag_width_lp-1:0] imux_sel_lo;
+  assign imux_sel_lo = (istate_r_is_min_lo)? num_in_p : ififo_sel_r;
+  
+  // ready selection
+  bsg_mux 
+ #(.width_p(1)
+  ,.els_p(mux_num_in_lp)
+  ) in_ready_mux
+  (.data_i(ififo_ready_lo)
+  ,.sel_i (imux_sel_lo)
+  ,.data_o(multi_ready_o)
+  );
+  
+  // valid selection
+  bsg_decode_with_v
+ #(.num_out_p(mux_num_in_lp)
+  ) in_valid_bdwv
+  (.i  (imux_sel_lo)
+  ,.v_i(multi_v_i)
+  ,.o  (ififo_valid_li)
+  );
+  
+  
+  // Header flits going into channel tunnel are buffered in fifo
+  // TODO: might be removed later to reduce latency
+  
+  bsg_two_fifo 
+ #(.width_p(width_p)
+  ) i_headerin
+  (.clk_i  (clk_i)
+  ,.reset_i(reset_i)
+
+  ,.ready_o(ififo_ready_lo[num_in_p])
+  ,.data_i (multi_data_i)
+  ,.v_i    (ififo_valid_li[num_in_p])
+
+  ,.v_o    (outside_valid_li)
+  ,.data_o (outside_data_li)
+  ,.yumi_i (outside_yumi_lo)
+  );
+
   
   // This generated block is for wormhole data flits buffering.
   // All wormhole packet headers are stored in bsg_channel_tunnel.
@@ -472,115 +573,9 @@ module  bsg_channel_tunnel_wormhole
     assign inside_yumi_li[i] = (icount_r_is_min_lo)? yumi_li[i] : 0;
   
   end
-  
-  
-  // Header flits going into channel tunnel are buffered in fifo
-  // TODO: might be removed later to reduce latency
-  
-  bsg_two_fifo 
- #(.width_p(width_p)
-  ) i_dummyin
-  (.clk_i  (clk_i)
-  ,.reset_i(reset_i)
 
-  ,.ready_o(ififo_ready_lo[num_in_p])
-  ,.data_i (multi_data_i)
-  ,.v_i    (ififo_valid_li[num_in_p])
-
-  ,.v_o    (outside_valid_li)
-  ,.data_o (outside_data_li)
-  ,.yumi_i (outside_yumi_lo)
-  );
   
-  
-  // Channel Tunnel Multiplexed Input Demux
-  
-  // Description of algorithm:
-  // This is the main part for traffic demultiplexing.
-  // Traffic coming in has (n+1) possible destinations: n ififos and 1 channel tunnel.
-  // Wormhole header flits and credit returning flit should go into channel tunnel.
-  // Data flits should go into corresponding ififos.
-  // Destination is selected by "reserved bits" generated by sender.
-  
-  logic [tag_width_lp-1:0] in_sel_r, in_sel_n;
-  logic [len_width_p-1:0]  istate_r, istate_n;
-  
-  always_ff @(posedge clk_i) 
-  begin
-    if (reset_i) 
-      begin
-        istate_r <= counter_min_value_lp;
-        in_sel_r <= num_in_p;
-      end 
-    else 
-      begin
-        istate_r <= istate_n;
-        in_sel_r <= in_sel_n;
-      end
-  end
-  
-  // ready selection
-  bsg_mux 
- #(.width_p(1)
-  ,.els_p(mux_num_in_lp)
-  ) in_ready_mux
-  (.data_i(ififo_ready_lo)
-  ,.sel_i (in_sel_r)
-  ,.data_o(multi_ready_o)
-  );
-  
-  // valid selection
-  bsg_decode_with_v 
- #(.num_out_p(mux_num_in_lp)
-  ) in_valid_bdwv
-  (.i  (in_sel_r)
-  ,.v_i(multi_v_i)
-  ,.o  (ififo_valid_li)
-  );
-  
-  
-  // State machine to handle valid-ready selection
-  //
-  // Initial state (or default state) selection is to bsg_channel_tunnel
-  // When a header flit come into bsg_channel_tunnel, selection is updated based on
-  // the source of received wormhole packet (to which data buffer). After the whole packet is
-  // received, it returns to default state selection.
-  // When a credit returning flit ccomes in, selection is not updated (it is a 1-flit packet).
-  always_comb 
-  begin
-    
-    istate_n = istate_r;
-    in_sel_n = in_sel_r;
-    
-    if (multi_v_i & multi_ready_o) 
-        // In default state
-        // Receive wormhole packet header flit
-        if (istate_r == counter_min_value_lp) 
-          begin
-            // When received packet is not for credit returning
-            // Update state
-            if (multi_data_i[raw_width_lp+:tag_width_lp] < num_in_p) 
-              begin
-                istate_n = multi_data_i[len_offset_lp+:len_width_p];
-                // When packet length is non-zero (payload flits non-zero)
-                // Update ififo selection
-                if (multi_data_i[len_offset_lp+:len_width_p] != 0)
-                    in_sel_n = multi_data_i[raw_width_lp+:tag_width_lp];
-              end
-          end
-        // In other states
-        // Receive wormhole packet payload flits
-        else 
-          begin
-            istate_n = istate_r - 1;
-            // When receiving last payload flit
-            // Return to default selection
-            if (istate_r == (counter_min_value_lp+1)) 
-                in_sel_n = num_in_p;
-          end
-  
-  end
-  
+/*************************** Debugging Information ****************************/
   
   // synopsys translate_off
   initial 
