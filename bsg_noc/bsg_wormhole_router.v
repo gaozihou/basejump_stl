@@ -34,20 +34,13 @@ module  bsg_wormhole_router
   // Otherwise, route NS first then WE
   ,parameter enable_yx_routing_p = 1'b0
   
-  // When header_on_lsb==0, first cycle is {reserved, x_cord, y_cord, length, payload}
-  // Otherwise, first cycle is {payload, length, y_cord, x_cord, reserved}
-  ,parameter header_on_lsb_p = 1'b0
+  // When header_on_lsb==0, first cycle is {x_cord, y_cord, length, reserved, payload}
+  // Otherwise, first cycle is {payload, reserved, length, y_cord, x_cord}
+  ,parameter header_on_lsb_p = 1'b1
   
   // Local parameters
   ,localparam bsg_ready_and_link_sif_width_lp = `bsg_ready_and_link_sif_width(width_p)
   ,localparam dirs_lp = (enable_2d_routing_p==0)? 3 : 5
-  ,localparam reserved_offset_lp = (header_on_lsb_p==0)? width_p-reserved_width_p : 0
-  ,localparam x_cord_offset_lp = (header_on_lsb_p==0)? 
-                    reserved_offset_lp-x_cord_width_p : reserved_offset_lp+reserved_width_p
-  ,localparam y_cord_offset_lp = (header_on_lsb_p==0)?
-                    x_cord_offset_lp-y_cord_width_p : x_cord_offset_lp+x_cord_width_p
-  ,localparam len_offset_lp = (header_on_lsb_p==0)?
-                    y_cord_offset_lp-len_width_p : y_cord_offset_lp+y_cord_width_p
 
   // Stub ports sequence: SNEWP
   ,parameter stub_in_p = {dirs_lp{1'b0}}
@@ -65,6 +58,12 @@ module  bsg_wormhole_router
   ,input [x_cord_width_p-1:0] my_x_i
   ,input [y_cord_width_p-1:0] my_y_i);
   
+  
+  localparam x_cord_offset_lp = (header_on_lsb_p==0)? width_p-x_cord_width_p : 0;
+  localparam y_cord_offset_lp = (header_on_lsb_p==0)? 
+                    x_cord_offset_lp-y_cord_width_p : x_cord_offset_lp+x_cord_width_p;
+  localparam len_offset_lp = (header_on_lsb_p==0)?
+                    y_cord_offset_lp-len_width_p : y_cord_offset_lp+y_cord_width_p;
   
   genvar i, j;
   
