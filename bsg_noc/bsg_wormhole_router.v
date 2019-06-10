@@ -59,7 +59,7 @@ module  bsg_wormhole_router
   ,input [y_cord_width_p-1:0] my_y_i);
   
   // Data structures for wormhole packet
-  `declare_bsg_wormhole_packet_s(width_p, reserved_width_p, x_cord_width_p, y_cord_width_p, len_width_p, wormhole_packet_s);
+  `declare_bsg_header_flit_no_reserved_s(width_p, x_cord_width_p, y_cord_width_p, len_width_p, header_flit_s);
   
   initial 
   begin
@@ -82,10 +82,10 @@ module  bsg_wormhole_router
   assign local_y_cord_i = my_y_i;
 
   logic [dirs_lp-1:0] valid_o, ready_i;
-  wormhole_packet_s [dirs_lp-1:0] data_o;
+  header_flit_s [dirs_lp-1:0] data_o;
   
   logic [dirs_lp-1:0] valid_i, ready_o;
-  wormhole_packet_s [dirs_lp-1:0] data_i;
+  header_flit_s [dirs_lp-1:0] data_i;
   
   `declare_bsg_ready_and_link_sif_s(width_p,bsg_ready_and_link_sif_s);
   
@@ -110,7 +110,7 @@ module  bsg_wormhole_router
   // Input Data fifos
 
   logic [dirs_lp-1:0] fifo_valid_o, fifo_yumi_i;
-  wormhole_packet_s [dirs_lp-1:0] fifo_data_o;
+  header_flit_s [dirs_lp-1:0] fifo_data_o;
   
   // stubbed ports accept all I/O and send none.
   
