@@ -136,17 +136,17 @@ module  bsg_channel_tunnel_wormhole
   localparam raw_width_lp  = width_p-tag_width_lp;
   
   // Data structures for wormhole packet
-  `declare_bsg_wormhole_packet_s(width_p, reserved_width_p, x_cord_width_p, y_cord_width_p, len_width_p, wormhole_packet_s);
+  `declare_bsg_header_flit_s(width_p, reserved_width_p, x_cord_width_p, y_cord_width_p, len_width_p, header_flit_s);
   // Data structures for remapped wormhole packet
-  `declare_bsg_channel_tunnel_wormhole_packet_s(width_p, reserved_width_p, x_cord_width_p, y_cord_width_p, len_width_p, channel_tunnel_packet_s);
+  `declare_bsg_channel_tunnel_header_flit_s(width_p, reserved_width_p, x_cord_width_p, y_cord_width_p, len_width_p, channel_tunnel_header_flit_s);
  
 /*************************** Original Channel Tunnel ****************************/
 
   logic outside_valid_li, outside_yumi_lo;
-  channel_tunnel_packet_s outside_data_li;
+  channel_tunnel_header_flit_s outside_data_li;
   
   logic outside_valid_lo, outside_yumi_li;
-  channel_tunnel_packet_s outside_data_lo;
+  channel_tunnel_header_flit_s outside_data_lo;
   
   logic [num_in_p-1:0] inside_valid_li, inside_yumi_lo;
   logic [num_in_p-1:0][raw_width_lp-1:0] ct_inside_data_li;
@@ -196,8 +196,8 @@ module  bsg_channel_tunnel_wormhole
     assign dest.data     = src.data;      \
     assign dest.reserved = src.reserved // no semicolon 
 
-  channel_tunnel_packet_s [num_in_p-1:0] ct_inside_data_li_cast,  ct_inside_data_lo_cast;
-  wormhole_packet_s       [num_in_p-1:0] inside_data_li, inside_data_lo;
+  channel_tunnel_header_flit_s [num_in_p-1:0] ct_inside_data_li_cast,  ct_inside_data_lo_cast;
+  header_flit_s [num_in_p-1:0] inside_data_li, inside_data_lo;
   
   for (i = 0; i < num_in_p; i++)
   begin: swizzle
@@ -208,17 +208,17 @@ module  bsg_channel_tunnel_wormhole
     `wormhole_swizzle(inside_data_lo[i], ct_inside_data_lo_cast[i]);
   end
   
-  channel_tunnel_packet_s multi_data_i_cast, multi_data_o_cast;
+  channel_tunnel_header_flit_s multi_data_i_cast, multi_data_o_cast;
   assign multi_data_i_cast = multi_data_i;
   assign multi_data_o_cast = multi_data_o;
   
 /*************************** BSG NOC Link Interface ****************************/
 
   logic [num_in_p-1:0] v_lo, yumi_li;
-  wormhole_packet_s [num_in_p-1:0] data_lo;
+  header_flit_s [num_in_p-1:0] data_lo;
   
   logic [num_in_p-1:0] v_li, ready_lo;
-  wormhole_packet_s [num_in_p-1:0] data_li;
+  header_flit_s [num_in_p-1:0] data_li;
   
   `declare_bsg_ready_and_link_sif_s(width_p,bsg_ready_and_link_sif_s);
   bsg_ready_and_link_sif_s [num_in_p-1:0] link_i_cast, link_o_cast;
